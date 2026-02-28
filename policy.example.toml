@@ -1,0 +1,7 @@
+[network]
+deny = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16"]
+allow = ["*"]
+bind_ports = "3000-9999"
+max_connections = 50
+max_bandwidth_mbps = 10
+connection_timeout_secs = 30
