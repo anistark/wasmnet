@@ -5,20 +5,44 @@
 version := `grep -m 1 'version = ' Cargo.toml | cut -d '"' -f 2`
 
 # Repository information
-repo := `if git remote -v >/dev/null 2>&1; then git remote get-url origin | sed -E 's/.*github.com[:/]([^/]+)\/([^/.]+).*/\1\/\2/'; else echo "anistark/wasmnet"; fi`
+repo := `git remote get-url origin 2>/dev/null | sed -E 's/.*github.com[:/]([^/]+)\/([^/.]+).*/\1\/\2/' || echo "anistark/wasmnet"`
 
 # Default recipe to display help information
 default:
     @just --list
     @echo "\nCurrent version: {{version}}"
 
-# Build the project in debug mode
-build: format lint test
+# Build the project
+build: sync-version format lint test
     cargo build --release
+
+# Build the npm client package
+build-client: sync-version
+    cd client && npm run build
+
+# Sync version from Cargo.toml to client/package.json
+sync-version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VERSION="{{version}}"
+    if [ -f "client/package.json" ]; then
+        CURRENT=$(grep -m 1 '"version":' client/package.json | cut -d '"' -f 4)
+        if [ "$CURRENT" != "$VERSION" ]; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" client/package.json
+            else
+                sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" client/package.json
+            fi
+            echo "✓ Updated client/package.json: $CURRENT → $VERSION"
+        else
+            echo "✓ client/package.json already at $VERSION"
+        fi
+    fi
 
 # Clean the project
 clean:
     cargo clean
+    rm -rf client/dist || true
     find . -name ".DS_Store" -type f -delete || true
 
 # Run the server with default settings
@@ -74,6 +98,11 @@ publish-crates: prepare-publish
     @echo "Publishing version {{version}} to crates.io..."
     cargo publish --allow-dirty
 
+# Publish npm client package
+publish-npm: build-client
+    @echo "Publishing @aspect-run/wasmnet-client v{{version}} to npm..."
+    cd client && npm publish --access public
+
 # Check if you're logged in to crates.io
 check-crates-login:
     @if [ -f ~/.cargo/credentials ]; then \
@@ -125,9 +154,9 @@ gh-release:
     echo "✓ GitHub release v{{version}} created successfully!"
     echo "View it at: https://github.com/{{repo}}/releases/tag/v{{version}}"
 
-# Release to both GitHub and crates.io
-publish: build publish-crates gh-release
-    @echo "✓ Released v{{version}} to GitHub and crates.io"
+# Release to GitHub, crates.io, and npm
+publish: build publish-crates publish-npm gh-release
+    @echo "✓ Released v{{version}} to GitHub, crates.io, and npm"
 
 # Create a pre-release tag with suffix (rc, alpha, beta, etc.)
 publish-rc: (publish-tag "rc")
