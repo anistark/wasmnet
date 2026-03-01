@@ -1,14 +1,10 @@
-use std::net::SocketAddr;
-
 use clap::Parser;
 use tracing::info;
-
-use wasmnet::policy::PolicyConfig;
 
 #[derive(Parser)]
 #[command(name = "wasmnet-server", about = "Networking proxy for browser WASM")]
 struct Args {
-    #[arg(short, long, default_value = "0.0.0.0")]
+    #[arg(short = 'H', long, default_value = "0.0.0.0")]
     host: String,
 
     #[arg(short, long, default_value_t = 9000)]
@@ -31,21 +27,20 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
-    let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
 
-    let server = if args.no_policy {
+    let mut builder = wasmnet::Server::builder().host(&args.host).port(args.port);
+
+    if args.no_policy {
         info!("starting with all policy checks disabled");
-        wasmnet::Server::allow_all(addr)
+        builder = builder.no_policy();
     } else if let Some(path) = &args.policy {
-        let content = std::fs::read_to_string(path)?;
-        let config: PolicyConfig = toml::from_str(&content)?;
-        info!("loaded policy from {path}");
-        wasmnet::Server::from_config(config, addr)
+        info!("loading policy from {path}");
+        builder = builder.policy_file(path)?;
     } else {
         info!("using default policy");
-        wasmnet::Server::from_config(PolicyConfig::default(), addr)
-    };
+    }
 
+    let server = builder.build()?;
     server.listen().await?;
     Ok(())
 }

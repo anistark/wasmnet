@@ -1,24 +1,49 @@
 # wasmnet project justfile
 # Install just: https://github.com/casey/just
-
 # Get version from Cargo.toml
+
 version := `grep -m 1 'version = ' Cargo.toml | cut -d '"' -f 2`
 
 # Repository information
-repo := `if git remote -v >/dev/null 2>&1; then git remote get-url origin | sed -E 's/.*github.com[:/]([^/]+)\/([^/.]+).*/\1\/\2/'; else echo "anistark/wasmnet"; fi`
+
+repo := `git remote get-url origin 2>/dev/null | sed -E 's/.*github.com[:/]([^/]+)\/([^/.]+).*/\1\/\2/' || echo "anistark/wasmnet"`
 
 # Default recipe to display help information
 default:
     @just --list
-    @echo "\nCurrent version: {{version}}"
+    @echo "\nCurrent version: {{ version }}"
 
-# Build the project in debug mode
-build: format lint test
+# Build the project
+build: sync-version format lint test
     cargo build --release
+
+# Build the npm client package
+build-client: sync-version
+    cd client && npm run build
+
+# Sync version from Cargo.toml to client/package.json
+sync-version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VERSION="{{ version }}"
+    if [ -f "client/package.json" ]; then
+        CURRENT=$(grep -m 1 '"version":' client/package.json | cut -d '"' -f 4)
+        if [ "$CURRENT" != "$VERSION" ]; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" client/package.json
+            else
+                sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" client/package.json
+            fi
+            echo "✓ Updated client/package.json: $CURRENT → $VERSION"
+        else
+            echo "✓ client/package.json already at $VERSION"
+        fi
+    fi
 
 # Clean the project
 clean:
     cargo clean
+    rm -rf client/dist || true
     find . -name ".DS_Store" -type f -delete || true
 
 # Run the server with default settings
@@ -27,11 +52,11 @@ run:
 
 # Run the server on a custom port
 run-port PORT="9000":
-    cargo run -- --port {{PORT}}
+    cargo run -- --port {{ PORT }}
 
 # Run the server with a policy file
 run-policy POLICY="policy.example.toml":
-    cargo run -- --policy {{POLICY}}
+    cargo run -- --policy {{ POLICY }}
 
 # Run the server with no policy restrictions
 run-open:
@@ -71,14 +96,19 @@ prepare-publish: format lint test build
 
 # Publish to crates.io (requires cargo login)
 publish-crates: prepare-publish
-    @echo "Publishing version {{version}} to crates.io..."
+    @echo "Publishing version {{ version }} to crates.io..."
     cargo publish --allow-dirty
+
+# Publish npm client package
+publish-npm: build-client
+    @echo "Publishing @anistark/wasmnet-client v{{ version }} to npm..."
+    cd client && npm publish --access public
 
 # Check if you're logged in to crates.io
 check-crates-login:
     @if [ -f ~/.cargo/credentials ]; then \
         echo "Credentials found. You appear to be logged in to crates.io"; \
-        echo "Ready to publish wasmnet v{{version}}"; \
+        echo "Ready to publish wasmnet v{{ version }}"; \
     else \
         echo "No credentials found. Run 'cargo login' with your crates.io token"; \
     fi
@@ -89,10 +119,10 @@ install:
 
 # Create a new release tag
 tag-release:
-    git tag v{{version}}
-    @echo "Created tag v{{version}}"
-    echo "Pushing tag v{{version}} to remote..."
-    git push origin "v{{version}}"
+    git tag v{{ version }}
+    @echo "Created tag v{{ version }}"
+    echo "Pushing tag v{{ version }} to remote..."
+    git push origin "v{{ version }}"
 
 # Create GitHub release
 gh-release:
@@ -109,30 +139,33 @@ gh-release:
         exit 1
     fi
 
-    if ! git rev-parse "v{{version}}" >/dev/null 2>&1; then
-        git tag -a "v{{version}}" -m "Release v{{version}}"
-        echo "✓ Created tag v{{version}}"
+    if ! git rev-parse "v{{ version }}" >/dev/null 2>&1; then
+        git tag -a "v{{ version }}" -m "Release v{{ version }}"
+        echo "✓ Created tag v{{ version }}"
     else
-        echo "✓ Tag v{{version}} already exists"
+        echo "✓ Tag v{{ version }} already exists"
     fi
 
-    echo "Pushing tag v{{version}} to remote..."
-    git push origin "v{{version}}"
+    echo "Pushing tag v{{ version }} to remote..."
+    git push origin "v{{ version }}"
 
-    gh release create "v{{version}}" \
+    gh release create "v{{ version }}" \
         "./target/release/wasmnet-server"
 
-    echo "✓ GitHub release v{{version}} created successfully!"
-    echo "View it at: https://github.com/{{repo}}/releases/tag/v{{version}}"
+    echo "✓ GitHub release v{{ version }} created successfully!"
+    echo "View it at: https://github.com/{{ repo }}/releases/tag/v{{ version }}"
 
-# Release to both GitHub and crates.io
-publish: build publish-crates gh-release
-    @echo "✓ Released v{{version}} to GitHub and crates.io"
+# Release to GitHub, crates.io, and npm
+publish: build publish-crates publish-npm gh-release
+    @echo "✓ Released v{{ version }} to GitHub, crates.io, and npm"
 
 # Create a pre-release tag with suffix (rc, alpha, beta, etc.)
 publish-rc: (publish-tag "rc")
+
 publish-alpha: (publish-tag "alpha")
+
 publish-beta: (publish-tag "beta")
+
 publish-dev: (publish-tag "dev")
 
 # Generic publish with custom tag suffix
@@ -153,7 +186,7 @@ publish-tag TAG:
     echo "Building project..."
     cargo build --release
 
-    VERSION_WITH_TAG="{{version}}-{{TAG}}"
+    VERSION_WITH_TAG="{{ version }}-{{ TAG }}"
     TAG_NAME="v$VERSION_WITH_TAG"
 
     echo "Creating pre-release: $TAG_NAME"
@@ -187,7 +220,7 @@ publish-tag TAG:
 
     **Installation:**
     \`\`\`bash
-    cargo install --git https://github.com/{{repo}} --tag $TAG_NAME
+    cargo install --git https://github.com/{{ repo }} --tag $TAG_NAME
     \`\`\`
 
     **Changes since last release:**
@@ -197,16 +230,16 @@ publish-tag TAG:
         "./target/release/wasmnet-server"
 
     echo "✓ Pre-release $TAG_NAME created successfully!"
-    echo "View it at: https://github.com/{{repo}}/releases/tag/$TAG_NAME"
+    echo "View it at: https://github.com/{{ repo }}/releases/tag/$TAG_NAME"
 
 # List all available publish commands
 publish-help:
     @echo "Available publish commands:"
     @echo "  just publish       - Full release to GitHub and crates.io"
-    @echo "  just publish-rc    - Release candidate (v{{version}}-rc)"
-    @echo "  just publish-alpha - Alpha release (v{{version}}-alpha)"
-    @echo "  just publish-beta  - Beta release (v{{version}}-beta)"
-    @echo "  just publish-dev   - Development release (v{{version}}-dev)"
-    @echo "  just publish-tag X - Custom tag release (v{{version}}-X)"
+    @echo "  just publish-rc    - Release candidate (v{{ version }}-rc)"
+    @echo "  just publish-alpha - Alpha release (v{{ version }}-alpha)"
+    @echo "  just publish-beta  - Beta release (v{{ version }}-beta)"
+    @echo "  just publish-dev   - Development release (v{{ version }}-dev)"
+    @echo "  just publish-tag X - Custom tag release (v{{ version }}-X)"
     @echo ""
-    @echo "Current version: {{version}}"
+    @echo "Current version: {{ version }}"

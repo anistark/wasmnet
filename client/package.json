@@ -1,0 +1,37 @@
+{
+  "name": "wasmnet",
+  "version": "0.1.1",
+  "description": "Browser client for wasmnet — networking proxy for WASM",
+  "type": "module",
+  "main": "dist/wasmnet-client.js",
+  "module": "dist/wasmnet-client.js",
+  "types": "dist/wasmnet-client.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/wasmnet-client.js",
+      "types": "./dist/wasmnet-client.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "mkdir -p dist && cp wasmnet-client.js dist/ && cp wasmnet-client.d.ts dist/",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "wasm",
+    "wasi",
+    "websocket",
+    "networking",
+    "proxy",
+    "tcp"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anistark/wasmnet",
+    "directory": "client"
+  },
+  "homepage": "https://github.com/anistark/wasmnet#readme"
+}

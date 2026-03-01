@@ -1,9 +1,14 @@
 [package]
 name = "wasmnet"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Networking proxy for browser WASM — bridges WASI socket APIs to real TCP via WebSocket"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/anistark/wasmnet"
+homepage = "https://github.com/anistark/wasmnet"
+keywords = ["wasm", "wasi", "websocket", "networking", "proxy"]
+categories = ["network-programming", "wasm"]
 
 [[bin]]
 name = "wasmnet-server"
