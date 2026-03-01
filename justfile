@@ -101,7 +101,7 @@ publish-crates: prepare-publish
 
 # Publish npm client package
 publish-npm: build-client
-    @echo "Publishing @anistark/wasmnet-client v{{ version }} to npm..."
+    @echo "Publishing wasmnet v{{ version }} to npm..."
     cd client && npm publish --access public
 
 # Check if you're logged in to crates.io

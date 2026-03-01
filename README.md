@@ -24,7 +24,7 @@ cargo install wasmnet
 ### Browser Client (npm)
 
 ```bash
-npm install @anistark/wasmnet-client
+npm install wasmnet
 ```
 
 ## Quick Start
@@ -47,11 +47,11 @@ wasmnet-server --no-policy
 
 ### Browser Client
 
-[![npm](https://img.shields.io/npm/v/@anistark/wasmnet-client)](https://www.npmjs.com/package/@anistark/wasmnet-client)
-[![npm downloads](https://img.shields.io/npm/dm/@anistark/wasmnet-client)](https://www.npmjs.com/package/@anistark/wasmnet-client)
+[![npm](https://img.shields.io/npm/v/wasmnet)](https://www.npmjs.com/package/wasmnet)
+[![npm downloads](https://img.shields.io/npm/dm/wasmnet)](https://www.npmjs.com/package/wasmnet)
 
 ```javascript
-import { WasmnetClient } from '@anistark/wasmnet-client';
+import { WasmnetClient } from 'wasmnet';
 
 const client = new WasmnetClient('ws://localhost:9000');
 await client.ready();
