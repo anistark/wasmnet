@@ -15,6 +15,18 @@ struct Args {
 
     #[arg(long, help = "Disable all policy checks (allow everything)")]
     no_policy: bool,
+
+    #[arg(long, help = "Max bandwidth in Mbps (overrides policy file)")]
+    max_bandwidth_mbps: Option<u32>,
+
+    #[arg(
+        long,
+        help = "Enable connection pooling with this idle timeout (seconds)"
+    )]
+    pool_idle_secs: Option<u64>,
+
+    #[arg(long, default_value_t = 8, help = "Max pooled connections per target")]
+    pool_per_key: usize,
 }
 
 #[tokio::main]
@@ -38,6 +50,19 @@ async fn main() -> anyhow::Result<()> {
         builder = builder.policy_file(path)?;
     } else {
         info!("using default policy");
+    }
+
+    if let Some(mbps) = args.max_bandwidth_mbps {
+        info!("bandwidth limit: {mbps} Mbps");
+        builder = builder.max_bandwidth_mbps(mbps);
+    }
+
+    if let Some(idle) = args.pool_idle_secs {
+        info!(
+            "connection pool: idle={idle}s, per_key={}",
+            args.pool_per_key
+        );
+        builder = builder.pool(idle, args.pool_per_key);
     }
 
     let server = builder.build()?;
