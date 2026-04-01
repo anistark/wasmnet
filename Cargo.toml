@@ -1,6 +1,6 @@
 [package]
 name = "wasmnet"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Networking proxy for browser WASM — bridges WASI socket APIs to real TCP via WebSocket"
 license = "MIT"
@@ -21,6 +21,9 @@ path = "src/lib.rs"
 [dependencies]
 tokio = { version = "1.49.0", features = ["full"] }
 tokio-tungstenite = "0.28.0"
+tokio-rustls = "0.26"
+rustls = "0.23"
+webpki-roots = "1.0"
 futures-util = "0.3.32"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

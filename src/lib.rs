@@ -1,6 +1,10 @@
+pub mod binary;
+pub mod dns;
 pub mod policy;
+pub mod pool;
 pub mod protocol;
 pub mod proxy;
+pub mod rate_limit;
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -11,9 +15,14 @@ use tokio_tungstenite::accept_async;
 use tracing::{error, info};
 
 use policy::{NetworkPolicy, Policy, PolicyConfig};
+use pool::ConnectionPool;
+use proxy::SessionConfig;
+use rate_limit::RateLimiter;
 
 pub struct Server {
     policy: Arc<Policy>,
+    rate_limiter: Arc<RateLimiter>,
+    pool: Option<Arc<ConnectionPool>>,
     addr: SocketAddr,
 }
 
@@ -23,6 +32,9 @@ pub struct ServerBuilder {
     no_policy: bool,
     host: String,
     port: u16,
+    max_bandwidth_mbps: Option<u32>,
+    pool_idle_secs: Option<u64>,
+    pool_per_key: Option<usize>,
 }
 
 impl ServerBuilder {
@@ -33,6 +45,9 @@ impl ServerBuilder {
             no_policy: false,
             host: "0.0.0.0".into(),
             port: 9000,
+            max_bandwidth_mbps: None,
+            pool_idle_secs: None,
+            pool_per_key: None,
         }
     }
 
@@ -73,21 +88,59 @@ impl ServerBuilder {
         self
     }
 
+    pub fn max_bandwidth_mbps(mut self, mbps: u32) -> Self {
+        self.max_bandwidth_mbps = Some(mbps);
+        self
+    }
+
+    pub fn pool(mut self, idle_secs: u64, per_key: usize) -> Self {
+        self.pool_idle_secs = Some(idle_secs);
+        self.pool_per_key = Some(per_key);
+        self
+    }
+
     pub fn build(self) -> Result<Server, anyhow::Error> {
         let addr: SocketAddr = format!("{}:{}", self.host, self.port).parse()?;
 
-        let policy = if self.no_policy {
-            Policy::allow_all()
+        let net_policy = if self.no_policy {
+            None
         } else if let Some(p) = self.policy {
-            Policy::new(&p)
+            Some(p)
         } else if let Some(c) = self.policy_config {
-            Policy::new(&c.network)
+            Some(c.network)
         } else {
-            Policy::new(&NetworkPolicy::default())
+            Some(NetworkPolicy::default())
+        };
+
+        let policy = match &net_policy {
+            Some(np) => Policy::new(np),
+            None => Policy::allow_all(),
+        };
+
+        let bandwidth = self
+            .max_bandwidth_mbps
+            .or(net_policy.as_ref().map(|p| p.max_bandwidth_mbps))
+            .unwrap_or(0);
+
+        let rate_limiter = if bandwidth > 0 {
+            RateLimiter::new(bandwidth)
+        } else {
+            RateLimiter::unlimited()
+        };
+
+        let pool = match (self.pool_idle_secs, self.pool_per_key) {
+            (Some(idle), Some(per_key)) => {
+                let p = Arc::new(ConnectionPool::new(idle, per_key));
+                p.start_cleanup_task();
+                Some(p)
+            }
+            _ => None,
         };
 
         Ok(Server {
             policy: Arc::new(policy),
+            rate_limiter: Arc::new(rate_limiter),
+            pool,
             addr,
         })
     }
@@ -105,8 +158,15 @@ impl Server {
     }
 
     pub fn new(policy: NetworkPolicy, addr: SocketAddr) -> Self {
+        let bw = policy.max_bandwidth_mbps;
         Self {
             policy: Arc::new(Policy::new(&policy)),
+            rate_limiter: Arc::new(if bw > 0 {
+                RateLimiter::new(bw)
+            } else {
+                RateLimiter::unlimited()
+            }),
+            pool: None,
             addr,
         }
     }
@@ -118,6 +178,8 @@ impl Server {
     pub fn allow_all(addr: SocketAddr) -> Self {
         Self {
             policy: Arc::new(Policy::allow_all()),
+            rate_limiter: Arc::new(RateLimiter::unlimited()),
+            pool: None,
             addr,
         }
     }
@@ -130,18 +192,26 @@ impl Server {
         self.addr
     }
 
-    pub async fn listen(self) -> std::io::Result<()> {
+    fn session_config(&self) -> SessionConfig {
+        SessionConfig {
+            policy: self.policy.clone(),
+            rate_limiter: self.rate_limiter.clone(),
+            pool: self.pool.clone(),
+        }
+    }
+
+    pub async fn listen(&self) -> std::io::Result<()> {
         let listener = TcpListener::bind(self.addr).await?;
         info!("wasmnet listening on {}", self.addr);
 
         loop {
             let (stream, peer) = listener.accept().await?;
-            let policy = self.policy.clone();
+            let config = self.session_config();
             tokio::spawn(async move {
                 match accept_async(stream).await {
                     Ok(ws) => {
                         info!("new session from {peer}");
-                        proxy::handle_session(ws, policy).await;
+                        proxy::handle_session(ws, config).await;
                         info!("session ended: {peer}");
                     }
                     Err(e) => {
@@ -153,7 +223,7 @@ impl Server {
     }
 
     pub async fn listen_with_shutdown(
-        self,
+        &self,
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> std::io::Result<()> {
         let listener = TcpListener::bind(self.addr).await?;
@@ -163,12 +233,12 @@ impl Server {
             result = async {
                 loop {
                     let (stream, peer) = listener.accept().await?;
-                    let policy = self.policy.clone();
+                    let config = self.session_config();
                     tokio::spawn(async move {
                         match accept_async(stream).await {
                             Ok(ws) => {
                                 info!("new session from {peer}");
-                                proxy::handle_session(ws, policy).await;
+                                proxy::handle_session(ws, config).await;
                                 info!("session ended: {peer}");
                             }
                             Err(e) => {
@@ -189,9 +259,14 @@ impl Server {
 }
 
 pub async fn handle_ws_upgrade(stream: tokio::net::TcpStream, policy: Arc<Policy>) {
+    let config = SessionConfig {
+        policy,
+        rate_limiter: Arc::new(RateLimiter::unlimited()),
+        pool: None,
+    };
     match accept_async(stream).await {
         Ok(ws) => {
-            proxy::handle_session(ws, policy).await;
+            proxy::handle_session(ws, config).await;
         }
         Err(e) => {
             error!("websocket upgrade failed: {e}");
