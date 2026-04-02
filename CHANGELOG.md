@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.2] - 2026-04-01
+## [0.1.2] - 2026-04-02
 
 ### Added
 
@@ -21,8 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `connectTls()`, `connectUdp()`, `resolve()` methods in browser client
 - Binary framing support in browser client (auto-negotiated)
 - TypeScript declarations for all new client methods
-- MIT license (`LICENSE`)
-- 15 unit tests (policy, rate limiting, DNS, binary framing, connection pooling)
 
 ### Changed
 
