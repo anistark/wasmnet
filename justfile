@@ -99,19 +99,32 @@ publish-crates: prepare-publish
     @echo "Publishing version {{ version }} to crates.io..."
     cargo publish --allow-dirty
 
+# Check if you're logged in to npm
+check-npm-login:
+    @npm whoami > /dev/null 2>&1 || (echo "Not logged in to npm. Run 'npm login' first." && exit 1)
+    @echo "Logged in to npm as $(npm whoami)"
+
 # Publish npm client package
-publish-npm: build-client
+publish-npm: build-client check-npm-login
     @echo "Publishing wasmnet v{{ version }} to npm..."
     cd client && npm publish --access public
 
 # Check if you're logged in to crates.io
 check-crates-login:
-    @if [ -f ~/.cargo/credentials ]; then \
-        echo "Credentials found. You appear to be logged in to crates.io"; \
-        echo "Ready to publish wasmnet v{{ version }}"; \
+    @if [ -f ~/.cargo/credentials ] || [ -f ~/.cargo/credentials.toml ]; then \
+        echo "✓ Logged in to crates.io"; \
     else \
-        echo "No credentials found. Run 'cargo login' with your crates.io token"; \
+        echo "Not logged in to crates.io. Run 'cargo login' with your token." && exit 1; \
     fi
+
+# Check if you're logged in to GitHub CLI
+check-gh-login:
+    @gh auth status > /dev/null 2>&1 || (echo "Not logged in to GitHub. Run 'gh auth login' first." && exit 1)
+    @echo "✓ Logged in to GitHub"
+
+# Pre-flight checks for all publish targets
+pre-publish: check-crates-login check-npm-login check-gh-login
+    @echo "✓ All publish credentials verified"
 
 # Install local binary
 install:
@@ -156,7 +169,7 @@ gh-release:
     echo "View it at: https://github.com/{{ repo }}/releases/tag/v{{ version }}"
 
 # Release to GitHub, crates.io, and npm
-publish: build publish-crates publish-npm gh-release
+publish: pre-publish build publish-crates publish-npm gh-release
     @echo "✓ Released v{{ version }} to GitHub, crates.io, and npm"
 
 # Create a pre-release tag with suffix (rc, alpha, beta, etc.)
