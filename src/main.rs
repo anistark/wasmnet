@@ -27,6 +27,18 @@ struct Args {
 
     #[arg(long, default_value_t = 8, help = "Max pooled connections per target")]
     pool_per_key: usize,
+
+    #[cfg(feature = "webtransport")]
+    #[arg(long, help = "Also serve WebTransport (HTTP/3) on this UDP port")]
+    webtransport_port: Option<u16>,
+
+    #[cfg(feature = "webtransport")]
+    #[arg(long, help = "TLS certificate PEM file for WebTransport (else self-signed)")]
+    cert: Option<String>,
+
+    #[cfg(feature = "webtransport")]
+    #[arg(long, help = "TLS private key PEM file for WebTransport")]
+    key: Option<String>,
 }
 
 #[tokio::main]
@@ -66,6 +78,21 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let server = builder.build()?;
+
+    #[cfg(feature = "webtransport")]
+    if let Some(wt_port) = args.webtransport_port {
+        use std::path::Path;
+        let wt_addr = format!("{}:{}", args.host, wt_port).parse()?;
+        let cert = args.cert.as_deref().map(Path::new);
+        let key = args.key.as_deref().map(Path::new);
+        info!("also serving WebTransport on {wt_addr}");
+        tokio::select! {
+            r = server.listen() => r?,
+            r = server.listen_webtransport(wt_addr, cert, key) => r?,
+        }
+        return Ok(());
+    }
+
     server.listen().await?;
     Ok(())
 }

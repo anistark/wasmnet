@@ -26,24 +26,19 @@ const MSG = {
 
 export class WasmnetClient {
   constructor(url, options = {}) {
-    this.ws = new WebSocket(url);
-    this.ws.binaryType = "arraybuffer";
     this.sockets = new Map();
     this.nextId = 1;
-    this.binary = options.binary === true;
     this._resolves = new Map();
-    this._ready = new Promise((resolve, reject) => {
-      this.ws.onopen = () => resolve();
-      this.ws.onerror = (e) => reject(e);
-    });
-    this.ws.onmessage = (e) => {
-      if (e.data instanceof ArrayBuffer) {
-        this._handleBinaryEvent(new Uint8Array(e.data));
-      } else {
-        this._handleEvent(JSON.parse(e.data));
-      }
-    };
-    this.ws.onclose = () => this._handleClose();
+
+    if ((options.transport || "websocket") === "webtransport") {
+      // The WebTransport path carries the binary protocol only.
+      this.binary = true;
+      this._transport = new WebTransportTransport(url, options, this);
+    } else {
+      this.binary = options.binary === true;
+      this._transport = new WebSocketTransport(url, options, this);
+    }
+    this._ready = this._transport.start();
   }
 
   async ready() {
@@ -221,13 +216,13 @@ export class WasmnetClient {
   }
 
   disconnect() {
-    this.ws.close();
+    this._transport.close();
   }
 
   // ── JSON transport ───────────────────────────────────
 
   _send(msg) {
-    this.ws.send(JSON.stringify(msg));
+    this._transport.sendText(JSON.stringify(msg));
   }
 
   _encodeBinary(data) {
@@ -256,7 +251,7 @@ export class WasmnetClient {
     const dv = new DataView(frame.buffer);
     dv.setBigUint64(1, BigInt(id));
     frame.set(payload, BINARY_HEADER);
-    this.ws.send(frame.buffer);
+    this._transport.sendBinaryFrame(frame);
   }
 
   _addrPortPayload(addr, port) {
@@ -469,5 +464,119 @@ export class WasmnetClient {
       entry.reject?.(new Error("connection closed"));
     }
     this._resolves.clear();
+  }
+}
+
+// ── Transports ─────────────────────────────────────────
+// Each transport feeds decoded frames back into the client via
+// _handleEvent (JSON) / _handleBinaryEvent (binary) and _handleClose.
+
+class WebSocketTransport {
+  constructor(url, _options, client) {
+    this.ws = new WebSocket(url);
+    this.ws.binaryType = "arraybuffer";
+    this.ws.onmessage = (e) => {
+      if (e.data instanceof ArrayBuffer) {
+        client._handleBinaryEvent(new Uint8Array(e.data));
+      } else {
+        client._handleEvent(JSON.parse(e.data));
+      }
+    };
+    this.ws.onclose = () => client._handleClose();
+  }
+
+  start() {
+    return new Promise((resolve, reject) => {
+      this.ws.onopen = () => resolve();
+      this.ws.onerror = (e) => reject(e);
+    });
+  }
+
+  sendText(str) {
+    this.ws.send(str);
+  }
+
+  sendBinaryFrame(frame) {
+    this.ws.send(frame.buffer);
+  }
+
+  close() {
+    this.ws.close();
+  }
+}
+
+const WT_LENGTH_PREFIX = 4;
+
+class WebTransportTransport {
+  constructor(url, options, client) {
+    if (typeof WebTransport === "undefined") {
+      throw new Error("WebTransport is not supported in this environment");
+    }
+    this.client = client;
+    const init = {};
+    if (options.serverCertificateHashes) {
+      init.serverCertificateHashes = options.serverCertificateHashes;
+    }
+    this.wt = new WebTransport(url, init);
+    this.writer = null;
+  }
+
+  async start() {
+    await this.wt.ready;
+    const stream = await this.wt.createBidirectionalStream();
+    this.writer = stream.writable.getWriter();
+    this._readLoop(stream.readable.getReader());
+  }
+
+  sendText() {
+    throw new Error("WebTransport transport is binary-only");
+  }
+
+  sendBinaryFrame(frame) {
+    const out = new Uint8Array(WT_LENGTH_PREFIX + frame.length);
+    new DataView(out.buffer).setUint32(0, frame.length);
+    out.set(frame, WT_LENGTH_PREFIX);
+    this.writer.write(out);
+  }
+
+  close() {
+    try {
+      this.wt.close();
+    } catch {
+      // already closing
+    }
+  }
+
+  async _readLoop(reader) {
+    let buf = new Uint8Array(0);
+    for (;;) {
+      let result;
+      try {
+        result = await reader.read();
+      } catch {
+        break;
+      }
+      if (result.done) break;
+
+      const merged = new Uint8Array(buf.length + result.value.length);
+      merged.set(buf, 0);
+      merged.set(result.value, buf.length);
+      buf = merged;
+
+      let off = 0;
+      while (buf.length - off >= WT_LENGTH_PREFIX) {
+        const len = new DataView(
+          buf.buffer,
+          buf.byteOffset + off,
+          WT_LENGTH_PREFIX,
+        ).getUint32(0);
+        if (buf.length - off - WT_LENGTH_PREFIX < len) break;
+        const start = off + WT_LENGTH_PREFIX;
+        this.client._handleBinaryEvent(buf.slice(start, start + len));
+        off = start + len;
+      }
+      if (off > 0) buf = buf.slice(off);
+    }
+    this.client._handleClose();
   }
 }

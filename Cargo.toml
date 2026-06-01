@@ -1,6 +1,6 @@
 [package]
 name = "wasmnet"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 description = "Networking proxy for browser WASM — bridges WASI socket APIs to real TCP via WebSocket"
 license = "MIT"
@@ -18,6 +18,12 @@ path = "src/main.rs"
 name = "wasmnet"
 path = "src/lib.rs"
 
+[features]
+default = []
+# Opt-in WebTransport (HTTP/3 over QUIC) transport. Pulls in the wtransport/quinn
+# stack, so it is kept out of the default build.
+webtransport = ["dep:wtransport"]
+
 [dependencies]
 tokio = { version = "1.49.0", features = ["full"] }
 tokio-tungstenite = "0.28.0"
@@ -34,3 +40,4 @@ clap = { version = "4.5.60", features = ["derive"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 anyhow = "1.0.102"
+wtransport = { version = "0.7.1", optional = true, features = ["self-signed"] }

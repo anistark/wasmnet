@@ -19,7 +19,7 @@ use crate::pool::ConnectionPool;
 use crate::protocol::{Event, Request};
 use crate::rate_limit::RateLimiter;
 
-type EventTx = mpsc::UnboundedSender<Event>;
+pub(crate) type EventTx = mpsc::UnboundedSender<Event>;
 type SocketMap = Arc<tokio::sync::Mutex<HashMap<u64, SocketEntry>>>;
 
 enum SocketEntry {
@@ -36,6 +36,7 @@ enum SocketEntry {
     },
 }
 
+#[derive(Clone)]
 pub struct SessionConfig {
     pub policy: Arc<Policy>,
     pub rate_limiter: Arc<RateLimiter>,
@@ -43,7 +44,7 @@ pub struct SessionConfig {
 }
 
 #[derive(Clone)]
-struct Ctx {
+pub(crate) struct Ctx {
     tx: EventTx,
     sockets: SocketMap,
     policy: Arc<Policy>,
@@ -53,6 +54,23 @@ struct Ctx {
 }
 
 impl Ctx {
+    pub(crate) fn new(tx: EventTx, config: SessionConfig) -> Self {
+        Ctx {
+            tx,
+            sockets: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            policy: config.policy,
+            active: Arc::new(AtomicUsize::new(0)),
+            rl: config.rate_limiter,
+            pool: config.pool,
+        }
+    }
+
+    /// Emit an event to the session's transport.
+    #[cfg(feature = "webtransport")]
+    pub(crate) fn notify(&self, ev: Event) {
+        let _ = self.tx.send(ev);
+    }
+
     fn check_limits(&self, id: u64, addr: &str, port: u16) -> bool {
         if self.active.load(Ordering::Relaxed) >= self.policy.max_connections {
             let _ = self.tx.send(Event::error(id, "max connections reached"));
@@ -78,14 +96,7 @@ pub async fn handle_session(
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
     let binary_mode = Arc::new(AtomicBool::new(false));
 
-    let ctx = Ctx {
-        tx: event_tx,
-        sockets: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        policy: config.policy,
-        active: Arc::new(AtomicUsize::new(0)),
-        rl: config.rate_limiter,
-        pool: config.pool,
-    };
+    let ctx = Ctx::new(event_tx, config);
 
     let bm = binary_mode.clone();
     let send_task = tokio::spawn(async move {
@@ -131,38 +142,45 @@ pub async fn handle_session(
             _ => continue,
         };
 
-        match req {
-            Request::Connect { id, addr, port } => handle_connect(id, addr, port, &ctx),
-            Request::ConnectTls { id, addr, port } => handle_connect_tls(id, addr, port, &ctx),
-            Request::ConnectUdp { id, addr, port } => {
-                handle_connect_udp(id, addr, port, &ctx).await;
-            }
-            Request::Bind { id, addr, port } => handle_bind(id, addr, port, &ctx).await,
-            Request::Listen { id, .. } => {
-                let _ = ctx.tx.send(Event::Listening { id, port: 0 });
-            }
-            Request::Send { id, data } => handle_send(id, data, &ctx.sockets).await,
-            Request::SendTo {
-                id,
-                addr,
-                port,
-                data,
-            } => handle_send_to(id, addr, port, data, &ctx.sockets).await,
-            Request::Close { id } => handle_close(id, &ctx.sockets, &ctx.active).await,
-            Request::Resolve { id, name } => handle_resolve(id, name, ctx.tx.clone()),
-        }
+        dispatch(req, &ctx).await;
     }
 
-    {
-        let mut map = ctx.sockets.lock().await;
-        for (_, entry) in map.drain() {
-            if let SocketEntry::Listener { shutdown } = entry {
-                let _ = shutdown.send(());
-            }
-        }
-    }
+    cleanup(&ctx).await;
     drop(ctx);
     let _ = send_task.await;
+}
+
+/// Route a decoded request to its handler. Transport-agnostic: shared by the
+/// WebSocket and WebTransport session loops.
+pub(crate) async fn dispatch(req: Request, ctx: &Ctx) {
+    match req {
+        Request::Connect { id, addr, port } => handle_connect(id, addr, port, ctx),
+        Request::ConnectTls { id, addr, port } => handle_connect_tls(id, addr, port, ctx),
+        Request::ConnectUdp { id, addr, port } => handle_connect_udp(id, addr, port, ctx).await,
+        Request::Bind { id, addr, port } => handle_bind(id, addr, port, ctx).await,
+        Request::Listen { id, .. } => {
+            let _ = ctx.tx.send(Event::Listening { id, port: 0 });
+        }
+        Request::Send { id, data } => handle_send(id, data, &ctx.sockets).await,
+        Request::SendTo {
+            id,
+            addr,
+            port,
+            data,
+        } => handle_send_to(id, addr, port, data, &ctx.sockets).await,
+        Request::Close { id } => handle_close(id, &ctx.sockets, &ctx.active).await,
+        Request::Resolve { id, name } => handle_resolve(id, name, ctx.tx.clone()),
+    }
+}
+
+/// Tear down a session: shut down any active listeners.
+pub(crate) async fn cleanup(ctx: &Ctx) {
+    let mut map = ctx.sockets.lock().await;
+    for (_, entry) in map.drain() {
+        if let SocketEntry::Listener { shutdown } = entry {
+            let _ = shutdown.send(());
+        }
+    }
 }
 
 // ── TCP connect ──────────────────────────────────────────

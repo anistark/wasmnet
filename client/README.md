@@ -53,15 +53,41 @@ Pass `{ binary: true }` to skip JSON + base64 overhead on data frames. Raw bytes
 const client = new WasmnetClient('ws://localhost:9000', { binary: true });
 ```
 
+### WebTransport
+
+Pass `{ transport: 'webtransport' }` to run the protocol over HTTP/3 / QUIC instead of WebSocket. The same API is used — only the transport changes. WebTransport is always binary-framed. The server must be started with `--webtransport-port` (see the [server README](https://github.com/anistark/wasmnet)).
+
+```javascript
+const client = new WasmnetClient('https://localhost:9001', {
+  transport: 'webtransport',
+});
+await client.ready();
+```
+
+Against a CA-trusted certificate this is all that's needed. For a self-signed dev certificate, pass the SHA-256 hash the server logs at startup so the browser will accept it:
+
+```javascript
+const client = new WasmnetClient('https://localhost:9001', {
+  transport: 'webtransport',
+  serverCertificateHashes: [{ algorithm: 'sha-256', value: hashBytes }],
+});
+```
+
+`hashBytes` is the 32-byte digest as a `Uint8Array` / `ArrayBuffer` (the server prints it as colon-separated hex).
+
 ## API
 
-### `new WasmnetClient(url: string, options?: { binary?: boolean })`
+### `new WasmnetClient(url: string, options?: ClientOptions)`
 
-Creates a client connecting to the wasmnet server. Set `binary: true` for binary framing mode.
+Creates a client connecting to the wasmnet server. Options:
+
+- `binary?: boolean` — use binary framing instead of JSON (WebSocket only; WebTransport is always binary).
+- `transport?: 'websocket' | 'webtransport'` — defaults to `'websocket'`.
+- `serverCertificateHashes?: { algorithm: 'sha-256', value: BufferSource }[]` — for WebTransport against a self-signed certificate.
 
 ### `ready(): Promise<void>`
 
-Resolves when the WebSocket connection is open.
+Resolves when the underlying connection (WebSocket or WebTransport) is open. Always `await` this before issuing requests.
 
 ### `connect(addr: string, port: number): Promise<number>`
 
@@ -117,7 +143,7 @@ Registers an accept handler for a TCP listener. `connId` is the new socket ID fo
 
 ### `disconnect(): void`
 
-Closes the WebSocket connection and all sockets.
+Closes the underlying connection and all sockets.
 
 ## License
 

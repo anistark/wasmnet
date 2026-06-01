@@ -5,6 +5,8 @@ pub mod pool;
 pub mod protocol;
 pub mod proxy;
 pub mod rate_limit;
+#[cfg(feature = "webtransport")]
+pub mod webtransport;
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -255,6 +257,22 @@ impl Server {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(feature = "webtransport")]
+impl Server {
+    /// Serve the same protocol over WebTransport (HTTP/3 / QUIC) on `addr`,
+    /// alongside (or instead of) the WebSocket listener. Pass a `cert`/`key`
+    /// PEM pair, or neither for a generated self-signed dev certificate.
+    pub async fn listen_webtransport(
+        &self,
+        addr: SocketAddr,
+        cert: Option<&Path>,
+        key: Option<&Path>,
+    ) -> anyhow::Result<()> {
+        let identity = webtransport::build_identity(cert, key).await?;
+        webtransport::serve(addr, identity, self.session_config()).await
     }
 }
 
