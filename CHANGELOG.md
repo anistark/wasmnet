@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.2] - 2026-04-04
+## [0.1.3] - 2026-04-04
+
+> Published as 0.1.3 — the 0.1.2 version was never released (skipped due to a partial publish), so these changes shipped in the 0.1.3 crate.
 
 ### Added
 
@@ -63,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Structured logging with `tracing` (env-filter via `RUST_LOG`)
 - 4 policy engine unit tests
 
-[Unreleased]: https://github.com/anistark/wasmnet/compare/v0.1.2...HEAD
-[0.1.2]: https://github.com/anistark/wasmnet/compare/v0.1.1...v0.1.2
+[Unreleased]: https://github.com/anistark/wasmnet/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/anistark/wasmnet/compare/v0.1.1...v0.1.3
 [0.1.1]: https://github.com/anistark/wasmnet/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/anistark/wasmnet/releases/tag/v0.1.0
