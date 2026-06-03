@@ -33,7 +33,10 @@ struct Args {
     webtransport_port: Option<u16>,
 
     #[cfg(feature = "webtransport")]
-    #[arg(long, help = "TLS certificate PEM file for WebTransport (else self-signed)")]
+    #[arg(
+        long,
+        help = "TLS certificate PEM file for WebTransport (else self-signed)"
+    )]
     cert: Option<String>,
 
     #[cfg(feature = "webtransport")]

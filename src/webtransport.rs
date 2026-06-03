@@ -24,10 +24,7 @@ const MAX_FRAME: u32 = 16 * 1024 * 1024;
 /// Build the endpoint's TLS identity. Supplying both `cert` and `key` loads a
 /// PEM keypair; supplying neither generates a self-signed certificate (dev
 /// only) and logs its SHA-256 for the browser's `serverCertificateHashes`.
-pub async fn build_identity(
-    cert: Option<&Path>,
-    key: Option<&Path>,
-) -> anyhow::Result<Identity> {
+pub async fn build_identity(cert: Option<&Path>, key: Option<&Path>) -> anyhow::Result<Identity> {
     match (cert, key) {
         (Some(cert), Some(key)) => Ok(Identity::load_pemfiles(cert, key).await?),
         (None, None) => {
@@ -86,7 +83,10 @@ async fn run_session(mut send: SendStream, mut recv: RecvStream, config: Session
     let send_task = tokio::spawn(async move {
         while let Some(ev) = event_rx.recv().await {
             let body = binary::encode_event(&ev);
-            if send.write_all(&(body.len() as u32).to_be_bytes()).await.is_err()
+            if send
+                .write_all(&(body.len() as u32).to_be_bytes())
+                .await
+                .is_err()
                 || send.write_all(&body).await.is_err()
             {
                 break;
