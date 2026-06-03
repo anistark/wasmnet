@@ -23,6 +23,7 @@ Browser WASM ──WebSocket──▶ wasmnet server ──TCP/UDP/TLS──▶ 
 - **Bandwidth limiting** — token-bucket rate limiter enforcing `max_bandwidth_mbps`
 - **Connection pooling** — reuse idle TCP connections with configurable TTL and warm-up
 - **Binary framing** — optional `[1B type][8B id][payload]` binary protocol, auto-detected alongside JSON
+- **WebTransport** — optional HTTP/3 / QUIC transport (opt-in `webtransport` feature) carrying the same protocol with lower latency than WebSocket
 - **Embeddable** — use as a library with `Server::builder()` or upgrade a single TCP stream with `handle_ws_upgrade()`
 
 ## Install
@@ -58,6 +59,20 @@ wasmnet-server --no-policy
 
 # Bandwidth limit of 5 Mbps + connection pooling
 wasmnet-server --max-bandwidth-mbps 5 --pool-idle-secs 60 --pool-per-key 4
+```
+
+#### WebTransport (HTTP/3)
+
+Build with the `webtransport` feature to also serve the protocol over QUIC on a UDP port, alongside WebSocket:
+
+```bash
+cargo install wasmnet --features webtransport
+
+# Self-signed dev certificate (the SHA-256 is logged at startup)
+wasmnet-server --webtransport-port 9001
+
+# Production: supply a CA-trusted PEM keypair
+wasmnet-server --webtransport-port 9001 --cert cert.pem --key key.pem
 ```
 
 ### Browser client
@@ -115,6 +130,19 @@ const client = new WasmnetClient('ws://localhost:9000', { binary: true });
 
 The server auto-detects the framing per message — JSON text frames and binary frames can even be mixed within the same session.
 
+#### WebTransport mode
+
+Pass `{ transport: 'webtransport' }` to use HTTP/3 / QUIC instead of WebSocket (same API, always binary-framed). Requires a server started with `--webtransport-port`:
+
+```javascript
+const client = new WasmnetClient('https://localhost:9001', {
+  transport: 'webtransport',
+  // For a self-signed dev cert, pass the SHA-256 the server logs at startup:
+  // serverCertificateHashes: [{ algorithm: 'sha-256', value: hashBytes }],
+});
+await client.ready();
+```
+
 ### Library (embed in Rust)
 
 ```rust
@@ -160,6 +188,11 @@ Options:
       --max-bandwidth-mbps <MBPS>     Bandwidth limit (overrides policy file)
       --pool-idle-secs <SECS>         Enable connection pooling with idle timeout
       --pool-per-key <N>              Max pooled connections per target [default: 8]
+
+  # Requires building with --features webtransport:
+      --webtransport-port <PORT>      Also serve WebTransport (HTTP/3) on this UDP port
+      --cert <FILE>                   TLS certificate PEM (else self-signed dev cert)
+      --key <FILE>                    TLS private key PEM
 ```
 
 Set `RUST_LOG=wasmnet=debug` for detailed logging.
@@ -287,10 +320,11 @@ src/
 ├── binary.rs      # Binary frame codec
 ├── rate_limit.rs  # Token-bucket bandwidth limiter
 ├── dns.rs         # Async DNS resolution
-└── pool.rs        # Idle TCP connection pool
+├── pool.rs        # Idle TCP connection pool
+└── webtransport.rs # WebTransport (HTTP/3) transport — `webtransport` feature
 
 client/
-├── wasmnet-client.js    # ES module (JSON + binary framing)
+├── wasmnet-client.js    # ES module (WebSocket / WebTransport, JSON + binary framing)
 ├── wasmnet-client.d.ts  # TypeScript declarations
 └── README.md
 ```

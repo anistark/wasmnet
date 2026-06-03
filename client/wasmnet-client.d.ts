@@ -3,9 +3,26 @@ export interface ListenResult {
   port: number;
 }
 
+/** A certificate hash for WebTransport's `serverCertificateHashes` option. */
+export interface WebTransportCertificateHash {
+  algorithm: "sha-256";
+  value: BufferSource;
+}
+
 export interface ClientOptions {
   /** Use binary framing instead of JSON (lower overhead for data). */
   binary?: boolean;
+  /**
+   * Transport to use. `"webtransport"` runs the protocol over HTTP/3 / QUIC
+   * (always binary-framed) and requires a server started with
+   * `--webtransport-port`. Defaults to `"websocket"`.
+   */
+  transport?: "websocket" | "webtransport";
+  /**
+   * For WebTransport against a self-signed certificate: the SHA-256 hash(es)
+   * logged by the server at startup. Ignored for the WebSocket transport.
+   */
+  serverCertificateHashes?: WebTransportCertificateHash[];
 }
 
 export type DataCallback = (data: Uint8Array) => void;
