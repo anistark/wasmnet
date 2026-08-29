@@ -19,7 +19,7 @@ Browser WASM ──WebSocket──▶ wasmnet server ──TCP/UDP/TLS──▶ 
 - **TLS termination** — `connect_tls` handles the TLS handshake server-side (rustls + webpki-roots)
 - **UDP support** — `connect_udp` / `send` / `send_to` with async receive
 - **DNS resolution** — `resolve` a hostname to IP addresses without opening a socket
-- **Policy engine** — allow/deny lists for IPs (CIDR), domains (wildcards), port ranges, connection limits
+- **Policy engine** — allow/deny lists for IPs (CIDR), domains and their subdomains, per-rule ports, port ranges, connection limits. Hostnames are re-checked against the CIDR rules once resolved, so a name cannot reach a denied range
 - **Bandwidth limiting** — token-bucket rate limiter enforcing `max_bandwidth_mbps`
 - **Connection pooling** — reuse idle TCP connections with configurable TTL and warm-up
 - **Binary framing** — optional `[1B type][8B id][payload]` binary protocol, auto-detected alongside JSON

@@ -1,6 +1,6 @@
 {
   "name": "wasmnet",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Browser client for wasmnet — networking proxy for WASM",
   "type": "module",
   "main": "dist/wasmnet-client.js",
