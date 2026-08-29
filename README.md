@@ -272,12 +272,22 @@ max_connections = 5
 ```
 
 Features:
-- **CIDR matching** — `10.0.0.0/8`, `172.16.0.0/12`, etc.
-- **Domain patterns** — exact (`api.example.com:443`) or wildcard (`*.github.com:443`)
+- **CIDR matching** — `10.0.0.0/8`, `172.16.0.0/12`, or a bare IP (`1.2.3.4`, `::1`)
+- **Domain patterns** — `example.com` and `*.example.com` both cover the domain and every subdomain of it
+- **Port-qualified rules** — append a port to any rule (`api.example.com:443`, `10.0.0.0/8:22`, `[::1]:80`); without one the rule covers every port
+- **Post-resolution enforcement** — a hostname is checked again against the CIDR rules once resolved, so `localhost` cannot reach a denied `127.0.0.1`
 - **Port ranges** — `3000-9999` or `3000,8080,9090`
 - **Connection limits** — `max_connections` per session
 - **Bandwidth limiting** — `max_bandwidth_mbps` enforced via token-bucket rate limiter
 - **Connection timeout** — `connection_timeout_secs` for outbound TCP connects
+
+#### Rule matching
+
+- **Deny wins.** Deny rules are evaluated first; a target that matches one is refused regardless of the allow list.
+- **Names are normalized.** Rules and targets are compared case-folded and with any single trailing dot removed, so `evil.com`, `EVIL.com` and `evil.com.` are one name.
+- **Domain rules cover subdomains.** `example.com` and `*.example.com` are equivalent: both match `example.com` and `sub.example.com`. Suffix lookalikes do not match — `evil.com` does not cover `notevil.com`.
+- **Hostnames are checked twice.** First against the domain rules as written, then once per resolved address against the CIDR rules. Every resolved address must clear the deny list, and the connection is made to the address that was approved rather than by re-resolving the name, so a second lookup cannot substitute a different answer.
+- **UDP datagrams carry their own destination**, so each `send_to` is checked, not only the initial bind.
 
 See [`policy.example.toml`](policy.example.toml) for a full example.
 

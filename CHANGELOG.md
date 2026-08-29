@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hostname targets no longer bypass the IP deny list** (#3) — a name is now resolved before the policy decides, and every resolved address is checked against the CIDR rules. The connection is made to the address that was approved rather than by re-resolving the name, so a second lookup cannot substitute a different one. Applies to `connect`, `connect_tls` and `connect_udp`; TLS keeps the original hostname for SNI. Previously `localhost` and `metadata.google.internal` were allowed under the default policy that blocks `127.0.0.0/8` and `169.254.0.0/16` (`src/policy.rs`, `src/proxy.rs`)
+- **UDP `send_to` is now policy-checked** — each datagram carries its own destination, and that destination was never checked, so a socket bound to an allowed target could send anywhere (`src/proxy.rs`)
+- **Ports in allow/deny rules are enforced** (#4) — a rule like `api.example.com:443` no longer applies to every port on the host. Ports also work on CIDR and bare-IP rules (`10.0.0.0/8:22`, `[::1]:80`); a rule with no port still covers every port. Removed the dead `allow_nets` string comparison in `is_allowed_domain` (`src/policy.rs`)
+- **Domain rules cover subdomains, the apex, and the trailing-dot form** (#5) — `example.com` and `*.example.com` are now equivalent and both match subdomains, and a single trailing dot is stripped from rules and targets, so `evil.com.` can no longer opt out of a deny rule written as `evil.com` (`src/policy.rs`)
+
+### Changed
+
+- Bare IP addresses in a rule (`1.2.3.4`, `::1`) are parsed as single-host networks instead of falling through to domain matching, so IPv6 literals are handled correctly
+- Allow rules are now more permissive for subdomains: `allow = ["example.com"]` covers `sub.example.com`, where before it matched only the exact name. Narrow an allow rule with a port if that matters (`example.com:443`)
+- `Policy::check_resolved` is new public API, for embedders enforcing the same rules on addresses they resolved themselves
+
 ## [0.1.4] - 2026-06-02
 
 ### Added
