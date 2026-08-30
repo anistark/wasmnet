@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-29
+
+Policy enforcement release. Four ways to reach a target the policy was meant to
+block are closed. If you rely on wasmnet's egress policy as a boundary around
+untrusted guest code, upgrade.
+
+### Security
+
+- **Hostname targets no longer bypass the IP deny list** (#3) — a name is now resolved before the policy decides, and every resolved address is checked against the CIDR rules. The connection is made to the address that was approved rather than by re-resolving the name, so a second lookup cannot substitute a different one. Applies to `connect`, `connect_tls` and `connect_udp`; TLS keeps the original hostname for SNI. Previously `localhost` and `metadata.google.internal` were allowed under the default policy that blocks `127.0.0.0/8` and `169.254.0.0/16` (`src/policy.rs`, `src/proxy.rs`)
+- **UDP `send_to` is now policy-checked** — each datagram carries its own destination, and that destination was never checked, so a socket bound to an allowed target could send anywhere (`src/proxy.rs`)
+- **Ports in allow/deny rules are enforced** (#4) — a rule like `api.example.com:443` no longer applies to every port on the host. Ports also work on CIDR and bare-IP rules (`10.0.0.0/8:22`, `[::1]:80`); a rule with no port still covers every port. Removed the dead `allow_nets` string comparison in `is_allowed_domain` (`src/policy.rs`)
+- **Domain rules cover subdomains, the apex, and the trailing-dot form** (#5) — `example.com` and `*.example.com` are now equivalent and both match subdomains, and a single trailing dot is stripped from rules and targets, so `evil.com.` can no longer opt out of a deny rule written as `evil.com` (`src/policy.rs`)
+
+### Added
+
+- `Policy::check_resolved(ip, port)` — applies the CIDR rules to an address, for embedders enforcing the same policy on names they resolved themselves
+- Port-qualified CIDR and bare-IP rules (`10.0.0.0/8:22`, `1.2.3.4:443`, `[::1]:80`)
+- End-to-end policy tests driving a real WebSocket session against the default policy (`tests/policy_enforcement.rs`)
+
+### Changed
+
+- **BREAKING: allow rules now cover subdomains.** `allow = ["example.com"]` permits `sub.example.com`, where before it matched only the exact name. Add a port to narrow a rule (`example.com:443`), or rely on deny rules, which are evaluated first
+- **BREAKING: hostnames that resolve into a denied range are now refused.** Code that reached `localhost` or a metadata endpoint by name under the default policy will start getting `denied` events. Use `--no-policy` or an explicit allow list if that traffic was intentional
+- Bare IP addresses in a rule (`1.2.3.4`, `::1`) parse as single-host networks instead of falling through to domain matching, so IPv6 literals are handled correctly
+- `Policy::check_connect` now decides only what the target string allows: a literal IP against the CIDR rules, a name against the domain rules. Pair it with `check_resolved` when resolving yourself
+- README documents the rule-matching semantics (deny wins, name normalization, subdomain coverage, post-resolution checks)
+
 ## [0.1.4] - 2026-06-02
 
 ### Added
@@ -78,7 +105,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Structured logging with `tracing` (env-filter via `RUST_LOG`)
 - 4 policy engine unit tests
 
-[Unreleased]: https://github.com/anistark/wasmnet/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/anistark/wasmnet/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/anistark/wasmnet/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/anistark/wasmnet/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/anistark/wasmnet/compare/v0.1.1...v0.1.3
 [0.1.1]: https://github.com/anistark/wasmnet/compare/v0.1.0...v0.1.1

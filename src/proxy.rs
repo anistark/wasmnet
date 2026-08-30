@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -71,13 +72,9 @@ impl Ctx {
         let _ = self.tx.send(ev);
     }
 
-    fn check_limits(&self, id: u64, addr: &str, port: u16) -> bool {
+    fn at_connection_limit(&self, id: u64) -> bool {
         if self.active.load(Ordering::Relaxed) >= self.policy.max_connections {
             let _ = self.tx.send(Event::error(id, "max connections reached"));
-            return true;
-        }
-        if let Err(msg) = self.policy.check_connect(addr, port) {
-            let _ = self.tx.send(Event::denied(id, msg));
             return true;
         }
         false
@@ -85,6 +82,23 @@ impl Ctx {
 
     fn timeout(&self) -> Duration {
         Duration::from_secs(self.policy.connection_timeout_secs)
+    }
+
+    /// Resolve a target and settle the policy decision, emitting `denied` or
+    /// `error` and returning `None` if it does not clear.
+    ///
+    /// The returned address is the one to connect to. Handing back a
+    /// `SocketAddr` rather than the original string is the point: a second
+    /// lookup at connect time could answer differently from the one that was
+    /// approved.
+    async fn approved_target(&self, id: u64, addr: &str, port: u16) -> Option<SocketAddr> {
+        match resolve_and_check(&self.policy, addr, port).await {
+            Ok(target) => Some(target),
+            Err(msg) => {
+                let _ = self.tx.send(Event::denied(id, msg));
+                None
+            }
+        }
     }
 }
 
@@ -167,7 +181,7 @@ pub(crate) async fn dispatch(req: Request, ctx: &Ctx) {
             addr,
             port,
             data,
-        } => handle_send_to(id, addr, port, data, &ctx.sockets).await,
+        } => handle_send_to(id, addr, port, data, ctx).await,
         Request::Close { id } => handle_close(id, &ctx.sockets, &ctx.active).await,
         Request::Resolve { id, name } => handle_resolve(id, name, ctx.tx.clone()),
     }
@@ -186,14 +200,17 @@ pub(crate) async fn cleanup(ctx: &Ctx) {
 // ── TCP connect ──────────────────────────────────────────
 
 fn handle_connect(id: u64, addr: String, port: u16, ctx: &Ctx) {
-    if ctx.check_limits(id, &addr, port) {
+    if ctx.at_connection_limit(id) {
         return;
     }
     let ctx = ctx.clone();
     tokio::spawn(async move {
-        let target = format!("{addr}:{port}");
+        let target = match ctx.approved_target(id, &addr, port).await {
+            Some(t) => t,
+            None => return,
+        };
 
-        let stream = match try_pool_or_connect(&ctx.pool, &target, ctx.timeout()).await {
+        let stream = match try_pool_or_connect(&ctx.pool, target, ctx.timeout()).await {
             Ok(s) => s,
             Err(msg) => {
                 let _ = ctx.tx.send(Event::error(id, msg));
@@ -221,14 +238,19 @@ fn handle_connect(id: u64, addr: String, port: u16, ctx: &Ctx) {
 // ── TLS connect ──────────────────────────────────────────
 
 fn handle_connect_tls(id: u64, addr: String, port: u16, ctx: &Ctx) {
-    if ctx.check_limits(id, &addr, port) {
+    if ctx.at_connection_limit(id) {
         return;
     }
     let ctx = ctx.clone();
     tokio::spawn(async move {
-        let target = format!("{addr}:{port}");
+        let target = match ctx.approved_target(id, &addr, port).await {
+            Some(t) => t,
+            None => return,
+        };
 
-        let tcp = match tcp_connect(&target, ctx.timeout()).await {
+        // Connect to the address the policy approved, but keep the original
+        // hostname for SNI and certificate verification.
+        let tcp = match tcp_connect(target, ctx.timeout()).await {
             Ok(s) => s,
             Err(msg) => {
                 let _ = ctx.tx.send(Event::error(id, msg));
@@ -285,9 +307,14 @@ async fn tls_handshake(
 // ── UDP ──────────────────────────────────────────────────
 
 async fn handle_connect_udp(id: u64, addr: String, port: u16, ctx: &Ctx) {
-    if ctx.check_limits(id, &addr, port) {
+    if ctx.at_connection_limit(id) {
         return;
     }
+
+    let target = match ctx.approved_target(id, &addr, port).await {
+        Some(t) => t,
+        None => return,
+    };
 
     let socket = match UdpSocket::bind("0.0.0.0:0").await {
         Ok(s) => s,
@@ -299,8 +326,7 @@ async fn handle_connect_udp(id: u64, addr: String, port: u16, ctx: &Ctx) {
         }
     };
 
-    let target = format!("{addr}:{port}");
-    if let Err(e) = socket.connect(&target).await {
+    if let Err(e) = socket.connect(target).await {
         let _ = ctx
             .tx
             .send(Event::error(id, format!("UDP connect failed: {e}")));
@@ -317,7 +343,7 @@ async fn handle_connect_udp(id: u64, addr: String, port: u16, ctx: &Ctx) {
         id,
         SocketEntry::Udp {
             socket: socket.clone(),
-            default_target: Some(target),
+            default_target: Some(target.to_string()),
             _cancel: cancel_tx,
         },
     );
@@ -474,22 +500,25 @@ async fn handle_send(id: u64, data_b64: String, sockets: &SocketMap) {
     }
 }
 
-async fn handle_send_to(id: u64, addr: String, port: u16, data_b64: String, sockets: &SocketMap) {
+async fn handle_send_to(id: u64, addr: String, port: u16, data_b64: String, ctx: &Ctx) {
     let bytes = match B64.decode(&data_b64) {
         Ok(b) => b,
         Err(_) => return,
     };
 
     let socket = {
-        let map = sockets.lock().await;
+        let map = ctx.sockets.lock().await;
         match map.get(&id) {
             Some(SocketEntry::Udp { socket, .. }) => Some(socket.clone()),
             _ => None,
         }
     };
 
-    if let Some(socket) = socket {
-        let _ = socket.send_to(&bytes, format!("{addr}:{port}")).await;
+    // Each datagram carries its own destination, so every one is checked.
+    if let Some(socket) = socket
+        && let Some(target) = ctx.approved_target(id, &addr, port).await
+    {
+        let _ = socket.send_to(&bytes, target).await;
     }
 }
 
@@ -579,7 +608,35 @@ async fn run_bridge<R, W>(
 
 // ── Helpers ──────────────────────────────────────────────
 
-async fn tcp_connect(target: &str, timeout: Duration) -> Result<TcpStream, String> {
+/// Apply the policy to a target, resolving it first when it is a name.
+///
+/// A literal IP is decided directly. A hostname is decided twice: once against
+/// the domain rules as written, then once per resolved address against the IP
+/// rules, so a name pointing into a denied range is refused with the deny
+/// reason rather than allowed. Every resolved address must clear the deny list
+/// for the connection to proceed.
+async fn resolve_and_check(policy: &Policy, addr: &str, port: u16) -> Result<SocketAddr, String> {
+    policy.check_connect(addr, port)?;
+
+    if let Ok(ip) = addr.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, port));
+    }
+
+    let resolved = dns::resolve(addr).await?;
+    let mut first = None;
+    for raw in &resolved {
+        let ip: IpAddr = raw
+            .parse()
+            .map_err(|_| format!("unparseable address for {addr}: {raw}"))?;
+        policy.check_resolved(ip, port)?;
+        first.get_or_insert(ip);
+    }
+
+    let ip = first.ok_or_else(|| format!("no addresses found for {addr}"))?;
+    Ok(SocketAddr::new(ip, port))
+}
+
+async fn tcp_connect(target: SocketAddr, timeout: Duration) -> Result<TcpStream, String> {
     match tokio::time::timeout(timeout, TcpStream::connect(target)).await {
         Ok(Ok(s)) => Ok(s),
         Ok(Err(e)) => Err(e.to_string()),
@@ -589,11 +646,13 @@ async fn tcp_connect(target: &str, timeout: Duration) -> Result<TcpStream, Strin
 
 async fn try_pool_or_connect(
     pool: &Option<Arc<ConnectionPool>>,
-    target: &str,
+    target: SocketAddr,
     timeout: Duration,
 ) -> Result<TcpStream, String> {
     if let Some(pool) = pool {
-        if let Some(s) = pool.get(target).await {
+        // Keyed by the resolved address, so a pooled stream is only reused for
+        // a target that passed the same check.
+        if let Some(s) = pool.get(&target.to_string()).await {
             debug!("reusing pooled connection to {target}");
             return Ok(s);
         }
